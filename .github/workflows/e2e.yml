@@ -1,0 +1,128 @@
+name: ING cookie consent E2E
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly check, catches changes to the banner on ing.pl.
+    - cron: '0 6 * * 1'
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Option 1: one job per browser, all running in parallel. HAR mode replays recorded
+  # traffic, so the result depends on neither the network nor the runner location.
+  matrix:
+    name: ${{ matrix.browser }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Install browser ${{ matrix.browser }}
+        run: >
+          mvn -B -q exec:java
+          -Dexec.mainClass=com.microsoft.playwright.CLI
+          -Dexec.args="install --with-deps ${{ matrix.browser }}"
+
+      - name: Run tests
+        run: mvn -B test -Dbrowsers=${{ matrix.browser }} -Dmode=har
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-${{ matrix.browser }}
+          path: |
+            target/surefire-reports/**
+            target/playwright-artifacts/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Option 2: three browsers in parallel inside a single job, same as a local `mvn test`.
+  all-browsers-in-parallel:
+    name: chromium + firefox + webkit (single job, 3 threads)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Install all browsers
+        run: >
+          mvn -B -q exec:java
+          -Dexec.mainClass=com.microsoft.playwright.CLI
+          -Dexec.args="install --with-deps chromium firefox webkit"
+
+      - name: Run tests
+        run: mvn -B test -Dmode=har
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-all-browsers
+          path: |
+            target/surefire-reports/**
+            target/playwright-artifacts/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Option 3: the same scenario against the live ing.pl. From GitHub runners (IP
+  # addresses outside Poland) the bank returns its hCaptcha security page, so the test
+  # skips itself with an explicit reason and leaves a screenshot as evidence. From a
+  # Polish connection the very same run executes normally.
+  live:
+    name: live ing.pl (skipped when the bank blocks the runner IP)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Install all browsers
+        run: >
+          mvn -B -q exec:java
+          -Dexec.mainClass=com.microsoft.playwright.CLI
+          -Dexec.args="install --with-deps chromium firefox webkit"
+
+      - name: Run tests
+        run: mvn -B test -Dmode=live
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-live
+          path: |
+            target/surefire-reports/**
+            target/playwright-artifacts/**
+          if-no-files-found: ignore
+          retention-days: 7
